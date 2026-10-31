@@ -11,7 +11,15 @@ import {
   serverTimestamp,
   updateDoc
 } from 'firebase/firestore';
-import { auth, db, provider, ready } from './firebase';
+import {
+  auth,
+  db,
+  provider,
+  ready,
+  OperationType,
+  handleFirestoreError,
+  testConnection
+} from './firebase';
 import {
   CheckCircle2,
   Plus,
@@ -23,7 +31,8 @@ import {
   Edit3,
   BookOpen,
   ClipboardList,
-  User
+  User,
+  Cloud
 } from 'lucide-react';
 
 const cats = [
@@ -93,6 +102,7 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('tm-theme') || 'dark');
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   // Apply theme to document
   useEffect(() => {
@@ -100,28 +110,41 @@ export default function App() {
     localStorage.setItem('tm-theme', theme);
   }, [theme]);
 
-  // Firebase Auth listener (when configured)
+  // Boot test connection
+  useEffect(() => {
+    if (ready && db) {
+      testConnection();
+    }
+  }, []);
+
+  // Firebase Auth state listener
   useEffect(() => {
     if (!ready || !auth) return;
     const unsubscribe = onAuthStateChanged(auth, firebaseUser => {
       if (firebaseUser) {
         const userData = {
           uid: firebaseUser.uid,
-          displayName: firebaseUser.displayName || 'Student',
+          displayName: firebaseUser.displayName || firebaseUser.email || 'Student',
           email: firebaseUser.email,
           isFirebase: true
         };
         setUser(userData);
         localStorage.setItem('tm-user', JSON.stringify(userData));
-      } else if (user?.isFirebase) {
-        setUser(null);
-        localStorage.removeItem('tm-user');
+      } else {
+        // If current session was firebase, reset
+        setUser(prev => {
+          if (prev?.isFirebase) {
+            localStorage.removeItem('tm-user');
+            return null;
+          }
+          return prev;
+        });
       }
     });
     return unsubscribe;
-  }, [user?.isFirebase]);
+  }, []);
 
-  // Task listener: Firestore if real Firebase, localStorage if local/demo
+  // Sync tasks from Firestore (for Firebase users) or LocalStorage (for guest users)
   useEffect(() => {
     if (!user) {
       setTasks([]);
@@ -129,16 +152,26 @@ export default function App() {
     }
 
     if (user.isFirebase && ready && db) {
-      return onSnapshot(
-        query(collection(db, 'users', user.uid, 'tasks'), orderBy('createdAt', 'desc')),
+      const taskPath = `users/${user.uid}/tasks`;
+      const q = query(collection(db, 'users', user.uid, 'tasks'), orderBy('createdAt', 'desc'));
+      const unsubscribe = onSnapshot(
+        q,
         snapshot => {
           setTasks(snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
         },
-        err => setError(err.message)
+        err => {
+          setError(err.message);
+          try {
+            handleFirestoreError(err, OperationType.GET, taskPath);
+          } catch (e) {
+            console.error('Handled Firestore permission/query error:', e);
+          }
+        }
       );
+      return unsubscribe;
     }
 
-    // Local / In-memory storage fallback
+    // Guest / local mode
     try {
       const stored = localStorage.getItem(`tm-tasks-${user.uid}`);
       if (stored) {
@@ -175,30 +208,30 @@ export default function App() {
   };
 
   async function handleGoogleSignIn() {
-    if (!ready || !auth) {
-      setError('Firebase credentials are not configured yet. You can continue as Guest / Demo.');
-      return;
-    }
     setError('');
+    setIsSigningIn(true);
     try {
       const result = await signInWithPopup(auth, provider);
       const userData = {
         uid: result.user.uid,
-        displayName: result.user.displayName || 'Student',
+        displayName: result.user.displayName || result.user.email || 'Student',
         email: result.user.email,
         isFirebase: true
       };
       setUser(userData);
       localStorage.setItem('tm-user', JSON.stringify(userData));
     } catch (err) {
-      setError(err.message);
+      console.error('Google Sign-in Error:', err);
+      setError(err.message || 'Failed to sign in with Google');
+    } finally {
+      setIsSigningIn(false);
     }
   }
 
   function handleGuestSignIn() {
     setError('');
     const guestUser = {
-      uid: 'demo-student-249',
+      uid: 'guest-student-249',
       displayName: 'Demo Student',
       email: 'student@taskmate.local',
       isGuest: true
@@ -224,40 +257,82 @@ export default function App() {
     e.preventDefault();
     if (!title.trim() || !user) return;
 
-    const data = {
-      title: title.trim(),
-      subject: subject.trim(),
-      category,
-      deadline: deadline || '',
-      status: editing?.status || 'pending',
-      updatedAt: user.isFirebase ? serverTimestamp() : Date.now()
-    };
+    const trimmedTitle = title.trim();
+    const trimmedSubject = subject.trim();
 
-    try {
-      if (user.isFirebase && ready && db) {
+    if (user.isFirebase && ready && db) {
+      const taskPath = `users/${user.uid}/tasks`;
+      try {
         if (editing) {
-          await updateDoc(doc(db, 'users', user.uid, 'tasks', editing.id), data);
-        } else {
-          await addDoc(collection(db, 'users', user.uid, 'tasks'), {
-            ...data,
-            createdAt: serverTimestamp()
-          });
-        }
-      } else {
-        // Local mode update/create
-        if (editing) {
-          const updated = tasks.map(t =>
-            t.id === editing.id ? { ...t, ...data, updatedAt: Date.now() } : t
-          );
-          persistLocalTasks(updated);
-        } else {
-          const newTask = {
-            id: 'task-' + Date.now(),
-            ...data,
-            createdAt: Date.now()
+          const docPath = `users/${user.uid}/tasks/${editing.id}`;
+          const updatePayload = {
+            title: trimmedTitle,
+            subject: trimmedSubject,
+            category,
+            deadline: deadline || '',
+            status: editing.status || 'pending',
+            updatedAt: serverTimestamp()
           };
-          persistLocalTasks([newTask, ...tasks]);
+          await updateDoc(doc(db, 'users', user.uid, 'tasks', editing.id), updatePayload);
+        } else {
+          const createPayload = {
+            title: trimmedTitle,
+            subject: trimmedSubject,
+            category,
+            deadline: deadline || '',
+            status: 'pending',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          };
+          await addDoc(collection(db, 'users', user.uid, 'tasks'), createPayload);
         }
+
+        setTitle('');
+        setSubject('');
+        setDeadline('');
+        setEditing(null);
+        setError('');
+      } catch (err) {
+        setError(err.message);
+        try {
+          handleFirestoreError(
+            err,
+            editing ? OperationType.UPDATE : OperationType.CREATE,
+            editing ? `users/${user.uid}/tasks/${editing.id}` : taskPath
+          );
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    } else {
+      // Local storage mode
+      if (editing) {
+        const updated = tasks.map(t =>
+          t.id === editing.id
+            ? {
+                ...t,
+                title: trimmedTitle,
+                subject: trimmedSubject,
+                category,
+                deadline: deadline || '',
+                status: editing.status || 'pending',
+                updatedAt: Date.now()
+              }
+            : t
+        );
+        persistLocalTasks(updated);
+      } else {
+        const newTask = {
+          id: 'task-' + Date.now(),
+          title: trimmedTitle,
+          subject: trimmedSubject,
+          category,
+          deadline: deadline || '',
+          status: 'pending',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+        persistLocalTasks([newTask, ...tasks]);
       }
 
       setTitle('');
@@ -265,40 +340,50 @@ export default function App() {
       setDeadline('');
       setEditing(null);
       setError('');
-    } catch (err) {
-      setError(err.message);
     }
   }
 
   async function toggle(t) {
     const nextStatus = t.status === 'completed' ? 'pending' : 'completed';
-    try {
-      if (user?.isFirebase && ready && db) {
+    if (user?.isFirebase && ready && db) {
+      const docPath = `users/${user.uid}/tasks/${t.id}`;
+      try {
         await updateDoc(doc(db, 'users', user.uid, 'tasks', t.id), {
           status: nextStatus,
           updatedAt: serverTimestamp()
         });
-      } else {
-        const updated = tasks.map(item =>
-          item.id === t.id ? { ...item, status: nextStatus, updatedAt: Date.now() } : item
-        );
-        persistLocalTasks(updated);
+      } catch (err) {
+        setError(err.message);
+        try {
+          handleFirestoreError(err, OperationType.UPDATE, docPath);
+        } catch (e) {
+          console.error(e);
+        }
       }
-    } catch (err) {
-      setError(err.message);
+    } else {
+      const updated = tasks.map(item =>
+        item.id === t.id ? { ...item, status: nextStatus, updatedAt: Date.now() } : item
+      );
+      persistLocalTasks(updated);
     }
   }
 
   async function remove(t) {
-    try {
-      if (user?.isFirebase && ready && db) {
+    if (user?.isFirebase && ready && db) {
+      const docPath = `users/${user.uid}/tasks/${t.id}`;
+      try {
         await deleteDoc(doc(db, 'users', user.uid, 'tasks', t.id));
-      } else {
-        const updated = tasks.filter(item => item.id !== t.id);
-        persistLocalTasks(updated);
+      } catch (err) {
+        setError(err.message);
+        try {
+          handleFirestoreError(err, OperationType.DELETE, docPath);
+        } catch (e) {
+          console.error(e);
+        }
       }
-    } catch (err) {
-      setError(err.message);
+    } else {
+      const updated = tasks.filter(item => item.id !== t.id);
+      persistLocalTasks(updated);
     }
   }
 
@@ -323,22 +408,21 @@ export default function App() {
           <em>under control.</em>
         </h1>
         <p>
-          Keep assignments, practicals, class tasks and exams organized in one calm workspace.
+          Keep assignments, practicals, class tasks and exams organized in one calm workspace with Firebase cloud synchronization.
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '22px' }}>
-          <button className="primary" onClick={handleGuestSignIn} style={{ justifyContent: 'center' }}>
-            <ClipboardList /> Continue to Workspace
+          <button
+            className="primary"
+            onClick={handleGoogleSignIn}
+            disabled={isSigningIn}
+            style={{ justifyContent: 'center' }}
+          >
+            <Cloud /> {isSigningIn ? 'Connecting...' : 'Continue with Google'}
           </button>
-          {ready ? (
-            <button onClick={handleGoogleSignIn} style={{ justifyContent: 'center' }}>
-              <User /> Continue with Google
-            </button>
-          ) : (
-            <small style={{ marginTop: '8px', opacity: 0.8 }}>
-              Local workspace mode is active. Configure Firebase environment variables for cloud sync.
-            </small>
-          )}
+          <button onClick={handleGuestSignIn} style={{ justifyContent: 'center' }}>
+            <ClipboardList /> Continue as Guest (Offline Preview)
+          </button>
         </div>
         {error && <p className="error" style={{ marginTop: '14px' }}>{error}</p>}
       </main>
@@ -368,8 +452,12 @@ export default function App() {
           </button>
         ))}
         <div className="sidefoot">
-          {user.displayName}
-          <button onClick={handleSignOut}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+            {user.isFirebase ? <Cloud style={{ width: '14px', height: '14px', color: 'var(--accent)' }} /> : <User style={{ width: '14px', height: '14px' }} />}
+            <span style={{ fontWeight: 600 }}>{user.displayName}</span>
+          </div>
+          <small>{user.isFirebase ? 'Firebase Synced' : 'Guest Mode'}</small>
+          <button onClick={handleSignOut} style={{ marginTop: '10px' }}>
             <LogOut /> Sign out
           </button>
         </div>
@@ -411,6 +499,7 @@ export default function App() {
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="Task title (e.g. Surveying practical)"
+            maxLength={200}
             required
           />
           <div className="fields">
@@ -418,6 +507,7 @@ export default function App() {
               value={subject}
               onChange={e => setSubject(e.target.value)}
               placeholder="Subject (optional)"
+              maxLength={100}
             />
             <select
               value={category}

@@ -1,8 +1,56 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'category', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'subject', 'category', 'deadline', 'status', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && (!('subject' in data) || (data.subject is string && data.subject.size() <= 100))
+        && data.category in ['assignment', 'practical', 'class-task', 'exam', 'other']
+        && (!('deadline' in data) || (data.deadline is string && data.deadline.size() <= 50))
+        && data.status in ['pending', 'completed'];
+    }
+
+    // Connection test probe path
+    match /test/connection {
+      allow read: if isSignedIn();
+    }
+
+    // User-isolated tasks
     match /users/{userId}/tasks/{taskId} {
-      allow read, create, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow get, list: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && isValidId(taskId)
+        && isValidTask(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      allow update: if isOwner(userId)
+        && isValidId(taskId)
+        && isValidTask(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'category', 'deadline', 'status', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(taskId);
     }
   }
 }

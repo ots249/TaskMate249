@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "Task": {
+      "title": "Task",
+      "description": "An academic task or assignment item",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The title of the academic task",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "subject": {
+          "type": "string",
+          "description": "Course code or subject name",
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "description": "Academic classification of the task",
+          "enum": ["assignment", "practical", "class-task", "exam", "other"]
+        },
+        "deadline": {
+          "type": "string",
+          "description": "Due date in YYYY-MM-DD or date format",
+          "maxLength": 50
+        },
+        "status": {
+          "type": "string",
+          "description": "Completion state of the task",
+          "enum": ["pending", "completed"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of task creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": ["title", "category", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Private academic task subcollection owned by the user"
+    }
+  }
+}
