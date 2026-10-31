@@ -31,6 +31,15 @@
           "description": "Completion state of the task",
           "enum": ["pending", "completed"]
         },
+        "calendarEventId": {
+          "type": "string",
+          "description": "Associated Google Calendar event ID if synced",
+          "maxLength": 256
+        },
+        "syncedToCalendar": {
+          "type": "boolean",
+          "description": "Flag indicating if task is synced to Google Calendar"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

@@ -7,6 +7,22 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const provider = new GoogleAuthProvider();
+
+// Add Google Calendar scopes for calendar event management
+provider.addScope('https://www.googleapis.com/auth/calendar.events');
+provider.addScope('https://www.googleapis.com/auth/calendar.readonly');
+
+// In-memory access token cache (NEVER stored in localStorage or sessionStorage)
+let cachedAccessToken = null;
+
+export function setAccessToken(token) {
+  cachedAccessToken = token;
+}
+
+export function getAccessToken() {
+  return cachedAccessToken;
+}
+
 export const ready = true;
 
 export const OperationType = {

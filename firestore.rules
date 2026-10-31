@@ -20,12 +20,14 @@ service cloud.firestore {
 
     function isValidTask(data) {
       return data.keys().hasAll(['title', 'category', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['title', 'subject', 'category', 'deadline', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'subject', 'category', 'deadline', 'status', 'createdAt', 'updatedAt', 'calendarEventId', 'syncedToCalendar'])
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
         && (!('subject' in data) || (data.subject is string && data.subject.size() <= 100))
         && data.category in ['assignment', 'practical', 'class-task', 'exam', 'other']
         && (!('deadline' in data) || (data.deadline is string && data.deadline.size() <= 50))
-        && data.status in ['pending', 'completed'];
+        && data.status in ['pending', 'completed']
+        && (!('calendarEventId' in data) || (data.calendarEventId is string && data.calendarEventId.size() <= 256))
+        && (!('syncedToCalendar' in data) || data.syncedToCalendar is bool);
     }
 
     // Connection test probe path
@@ -48,7 +50,7 @@ service cloud.firestore {
         && isValidTask(request.resource.data)
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.updatedAt == request.time
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'category', 'deadline', 'status', 'updatedAt']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'subject', 'category', 'deadline', 'status', 'updatedAt', 'calendarEventId', 'syncedToCalendar']);
 
       allow delete: if isOwner(userId) && isValidId(taskId);
     }
