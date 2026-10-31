@@ -43,7 +43,8 @@ import {
   ExternalLink,
   RefreshCw,
   AlertTriangle,
-  X
+  User,
+  Cloud
 } from 'lucide-react';
 
 const cats = [
@@ -291,9 +292,11 @@ export default function App() {
       };
       setUser(userData);
       localStorage.setItem('tm-user', JSON.stringify(userData));
+      return credential?.accessToken;
     } catch (err) {
       console.error('Google Sign-in Error:', err);
       setError(err.message || 'Failed to sign in with Google');
+      return null;
     } finally {
       setIsSigningIn(false);
     }
@@ -351,15 +354,28 @@ export default function App() {
   // CONFIRMATION-GATED: Sync a task to Google Calendar
   function promptSyncTaskToCalendar(task) {
     if (!user?.isFirebase) {
-      setError('Please sign in with Google to sync tasks to Google Calendar.');
+      setConfirmModal({
+        isOpen: true,
+        title: 'Connect Google Calendar',
+        message: `To push "${task.title}" to Google Calendar, sign in with your Google account.`,
+        confirmText: 'Sign in with Google',
+        isDestructive: false,
+        onConfirm: async () => {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          const token = await handleGoogleSignIn();
+          if (token) {
+            promptSyncTaskToCalendar(task);
+          }
+        }
+      });
       return;
     }
 
     setConfirmModal({
       isOpen: true,
-      title: 'Sync Task to Google Calendar',
-      message: `Add "${task.title}" as an all-day event to your primary Google Calendar on ${task.deadline || 'today'}?`,
-      confirmText: 'Add to Calendar',
+      title: 'Push Task to Google Calendar',
+      message: `Push "${task.title}" to your connected primary Google Calendar? Date: ${task.deadline || 'Today'}`,
+      confirmText: 'Push to Calendar',
       isDestructive: false,
       onConfirm: async () => {
         setConfirmModal(prev => ({ ...prev, isOpen: false }));
@@ -383,7 +399,7 @@ export default function App() {
             loadCalendarEvents();
           }
         } catch (err) {
-          setError('Failed to sync to Google Calendar: ' + err.message);
+          setError('Failed to push to Google Calendar: ' + err.message);
         }
       }
     });
@@ -586,7 +602,6 @@ export default function App() {
   }
 
   function remove(t) {
-    // If task is synced to calendar, confirm deleting task and calendar event
     if (t.syncedToCalendar && t.calendarEventId) {
       setConfirmModal({
         isOpen: true,
@@ -614,7 +629,6 @@ export default function App() {
       return;
     }
 
-    // Normal delete confirmation
     setConfirmModal({
       isOpen: true,
       title: 'Delete Academic Task',
@@ -653,7 +667,6 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  // Format event date/time
   function formatEventTime(event) {
     if (event.start?.dateTime) {
       const d = new Date(event.start.dateTime);
@@ -686,7 +699,6 @@ export default function App() {
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '24px' }}>
-          {/* Official Google Sign-in button */}
           <button
             className="g-btn"
             onClick={handleGoogleSignIn}
@@ -750,6 +762,20 @@ export default function App() {
         </div>
       )}
 
+      {/* Mobile Top Navigation & Profile Bar */}
+      <div className="mobile-user-bar">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {user.isFirebase ? <Cloud style={{ width: '14px', height: '14px', color: 'var(--accent)' }} /> : <User style={{ width: '14px', height: '14px' }} />}
+          <span style={{ fontWeight: 600 }}>{user.displayName}</span>
+        </div>
+        <button
+          onClick={handleSignOut}
+          style={{ padding: '4px 8px', fontSize: '11px', border: '1px solid var(--line)', gap: '4px' }}
+        >
+          <LogOut style={{ width: '12px', height: '12px' }} /> Sign out
+        </button>
+      </div>
+
       <aside>
         <div className="brand">
           <CheckCircle2 /> TaskMate <b>249</b>
@@ -789,6 +815,7 @@ export default function App() {
 
         <div className="sidefoot">
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+            {user.isFirebase ? <Cloud style={{ width: '14px', height: '14px', color: 'var(--accent)' }} /> : <User style={{ width: '14px', height: '14px' }} />}
             <span style={{ fontWeight: 600 }}>{user.displayName}</span>
           </div>
           <small>{user.isFirebase ? 'Google Account' : 'Guest Mode'}</small>
@@ -824,7 +851,7 @@ export default function App() {
             <strong>{stats.pending}</strong>
           </article>
           <article>
-            <small>Calendar synced</small>
+            <small>On Calendar</small>
             <strong style={{ color: 'var(--accent)' }}>{stats.synced}</strong>
           </article>
         </div>
@@ -925,60 +952,63 @@ export default function App() {
                   className={'task ' + (t.status === 'completed' ? 'done' : '')}
                   key={t.id}
                 >
-                  <button
-                    className="check"
-                    onClick={() => toggle(t)}
-                    title={t.status === 'completed' ? 'Mark pending' : 'Mark completed'}
-                  >
-                    <CheckCircle2 />
-                  </button>
-                  <div className="taskbody">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <strong>{t.title}</strong>
-                      {t.syncedToCalendar && (
-                        <span className="badge cal" title="Scheduled on Google Calendar">
-                          <CalendarDays style={{ width: '12px', height: '12px' }} /> Google Calendar
-                        </span>
-                      )}
+                  <div className="task-main">
+                    <button
+                      className="check"
+                      onClick={() => toggle(t)}
+                      title={t.status === 'completed' ? 'Mark pending' : 'Mark completed'}
+                    >
+                      <CheckCircle2 />
+                    </button>
+                    <div className="taskbody">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <strong>{t.title}</strong>
+                        {t.syncedToCalendar && (
+                          <span className="badge cal" title="Scheduled on Google Calendar">
+                            <CalendarDays style={{ width: '12px', height: '12px' }} /> On Calendar
+                          </span>
+                        )}
+                      </div>
+                      <small>
+                        {t.subject || 'No subject'} · {cats.find(c => c[0] === t.category)?.[1]}{' '}
+                        {t.deadline && '· Due ' + t.deadline}
+                      </small>
                     </div>
-                    <small>
-                      {t.subject || 'No subject'} · {cats.find(c => c[0] === t.category)?.[1]}{' '}
-                      {t.deadline && '· Due ' + t.deadline}
-                    </small>
                   </div>
 
-                  {/* Calendar Sync Button */}
-                  {user.isFirebase && (
-                    t.syncedToCalendar ? (
+                  <div className="task-actions">
+                    {/* Explicit button to push specific task to connected Google Calendar */}
+                    {t.syncedToCalendar ? (
                       <button
-                        className="icon"
+                        type="button"
+                        className="cal-push-btn synced"
                         onClick={() => promptRemoveFromCalendar(t)}
-                        title="Remove from Google Calendar (Requires confirmation)"
-                        style={{ color: '#ef8290' }}
+                        title="Remove this event from Google Calendar"
                       >
-                        <CalendarDays />
+                        <CalendarDays /> Synced to Calendar
                       </button>
                     ) : (
                       <button
-                        className="icon"
+                        type="button"
+                        className="cal-push-btn"
                         onClick={() => promptSyncTaskToCalendar(t)}
-                        title="Sync task to Google Calendar"
+                        title="Push this task to your connected Google Calendar"
                       >
-                        <CalendarDays />
+                        <CalendarDays /> Push to Calendar
                       </button>
-                    )
-                  )}
+                    )}
 
-                  <button className="icon" onClick={() => edit(t)} title="Edit task">
-                    <Edit3 />
-                  </button>
-                  <button
-                    className="icon danger"
-                    onClick={() => remove(t)}
-                    title="Delete task"
-                  >
-                    <Trash2 />
-                  </button>
+                    <button className="icon" onClick={() => edit(t)} title="Edit task">
+                      <Edit3 />
+                    </button>
+                    <button
+                      className="icon danger"
+                      onClick={() => remove(t)}
+                      title="Delete task"
+                    >
+                      <Trash2 />
+                    </button>
+                  </div>
                 </article>
               ))}
               {!visible.length && (
